@@ -53,7 +53,7 @@ async function generateContentWithRetry(params: any, maxBackendAttempts = 3): Pr
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 // Increase payload sizes for holding base64-encoded ultrasound scans
 app.use(express.json({ limit: "15mb" }));
