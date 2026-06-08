@@ -5,8 +5,17 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { calculateNormality } from "./src/utils/normalityCalculator";
 import { StudyType } from "./src/types";
+import multer from "multer";
 
 dotenv.config();
+
+// Configure multer to parse multichunk files in memory up to 15MB
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 15 * 1024 * 1024,
+  }
+});
 
 // Ensure Gemini API key is available
 if (!process.env.GEMINI_API_KEY) {
@@ -63,11 +72,12 @@ app.use(express.urlencoded({ extended: true, limit: "15mb" }));
  * Endpoint 1: Analyze ultrasound scan and extract measurements.
  * Matches user's custom study types and extracts structure definitions.
  */
-app.post("/api/analyze", async (req: express.Request, res: express.Response): Promise<void> => {
+app.post("/api/analyze", upload.single('image'), async (req: express.Request, res: express.Response): Promise<void> => {
   try {
     const { imageBase64, studyType, mimeType, examFindings } = req.body;
 
-    if (!imageBase64 && !examFindings) {
+    const hasImage = !!req.file || !!imageBase64;
+    if (!hasImage && !examFindings) {
       res.status(400).json({ error: "Por favor, envie uma captura de tela do exame ou insira suas anotações clínicas na caixa de texto." });
       return;
     }
@@ -142,12 +152,38 @@ app.post("/api/analyze", async (req: express.Request, res: express.Response): Pr
 
     const parts: any[] = [];
 
-    if (imageBase64) {
-      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+    let base64Data = "";
+    let finalMimeType = mimeType || "image/jpeg";
+
+    if (req.file) {
+      base64Data = req.file.buffer.toString("base64");
+      finalMimeType = req.file.mimetype;
+    } else if (imageBase64) {
+      if (imageBase64.startsWith("http://") || imageBase64.startsWith("https://")) {
+        try {
+          console.log(`[Backup server download] Baixando imagem externa de URL para analisar: ${imageBase64}`);
+          const imgResponse = await fetch(imageBase64);
+          if (imgResponse.ok) {
+            const arrayBuffer = await imgResponse.arrayBuffer();
+            base64Data = Buffer.from(arrayBuffer).toString("base64");
+            finalMimeType = imgResponse.headers.get("content-type") || "image/jpeg";
+            console.log(`[Backup server download] Download concluído com sucesso. Tamanho: ${base64Data.length} chars, tipo: ${finalMimeType}`);
+          } else {
+            console.warn(`[Backup server download] Falha com status ${imgResponse.status} ao baixar imagem: ${imageBase64}`);
+          }
+        } catch (fetchErr) {
+          console.error("[Backup server download] Erro ao buscar imagem externa da URL:", fetchErr);
+        }
+      } else {
+        base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+      }
+    }
+
+    if (base64Data) {
       const correctImagePart = {
         inlineData: {
-          mimeType: mimeType || "image/jpeg",
-          data: cleanBase64,
+          mimeType: finalMimeType,
+          data: base64Data,
         }
       };
       parts.push(correctImagePart);

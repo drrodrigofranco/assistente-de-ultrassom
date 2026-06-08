@@ -31,7 +31,7 @@ import { StudyType, StructureData, CalculationResult, ExamReport, SavedLaudo } f
 import { sampleCases, ClinicalCase } from './utils/sampleData';
 import { calculateNormality } from './utils/normalityCalculator';
 import { eurpReferencesDb } from './utils/eurpReferences';
-import { compressImage } from './utils/imageCompressor';
+import { compressImage, dataURLtoBlob } from './utils/imageCompressor';
 
 const getStudyTypeLabel = (type: StudyType): string => {
   switch (type) {
@@ -61,6 +61,43 @@ const getStudyTypeLabel = (type: StudyType): string => {
     case 'abdominal_wall': return 'Parede Abdominal';
     default: return type || 'Tireoide';
   }
+};
+
+/**
+ * Shared network helper to upload ultrasound scans to the radiology engine.
+ * Converts client-side base64 previews into standard binary files uploaded 
+ * via multipart/form-data, bypassing proxy/WAF JSON size limits & signature filters.
+ */
+const executeAnalyzeRequest = async (
+  imageBase64: string | null,
+  studyType: string,
+  mimeType: string,
+  examFindings: string | null
+): Promise<Response> => {
+  const formData = new FormData();
+  
+  if (imageBase64 && imageBase64.startsWith('data:')) {
+    try {
+      const imageBlob = dataURLtoBlob(imageBase64);
+      formData.append('image', imageBlob, 'examination.jpg');
+    } catch (err) {
+      console.warn('[Network] Error converting base64 preview to binary blob, sending inline fallback:', err);
+      formData.append('imageBase64', imageBase64);
+    }
+  } else if (imageBase64) {
+    formData.append('imageBase64', imageBase64);
+  }
+
+  formData.append('studyType', studyType);
+  formData.append('mimeType', mimeType);
+  if (examFindings) {
+    formData.append('examFindings', examFindings);
+  }
+
+  return await fetch('/api/analyze', {
+    method: 'POST',
+    body: formData,
+  });
 };
 
 export default function App() {
@@ -645,18 +682,12 @@ export default function App() {
       }));
 
       try {
-        const response = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            imageBase64: fileItem.preview,
-            studyType: studyType,
-            mimeType: fileItem.file.type || 'image/jpeg',
-            examFindings: null
-          }),
-        });
+        const response = await executeAnalyzeRequest(
+          fileItem.preview,
+          studyType,
+          fileItem.file.type || 'image/jpeg',
+          null
+        );
 
         const responseText = await response.text();
         let data: any;
@@ -862,18 +893,12 @@ export default function App() {
         }));
 
         try {
-          const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              imageBase64: fileItem.preview,
-              studyType: studyType,
-              mimeType: fileItem.file.type || 'image/jpeg',
-              examFindings: null // Puramente estrutural na análise em lote
-            }),
-          });
+          const response = await executeAnalyzeRequest(
+            fileItem.preview,
+            studyType,
+            fileItem.file.type || 'image/jpeg',
+            null
+          );
 
           const responseText = await response.text();
           let data: any;
@@ -1029,18 +1054,12 @@ export default function App() {
     });
 
     try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageBase64: imagePreview || null,
-          studyType: studyType,
-          mimeType: imageFile ? imageFile.type : 'image/jpeg',
-          examFindings: examFindings.trim() || null
-        }),
-      });
+      const response = await executeAnalyzeRequest(
+        imagePreview || null,
+        studyType,
+        imageFile ? imageFile.type : 'image/jpeg',
+        examFindings.trim() || null
+      );
 
       const responseText = await response.text();
       let data: any;
