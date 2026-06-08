@@ -67,6 +67,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 // Increase payload sizes for holding base64-encoded ultrasound scans
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+app.use(express.raw({ type: ['image/*', 'application/octet-stream'], limit: '15mb' }));
 
 /**
  * Endpoint 1: Analyze ultrasound scan and extract measurements.
@@ -81,9 +82,36 @@ app.post("/api/analyze", (req, res, next) => {
   }
 }, async (req: express.Request, res: express.Response): Promise<void> => {
   try {
-    const { imageBase64, studyType, mimeType, examFindings, isChunked, chunks, imageUrl } = req.body;
+    let studyType = "";
+    let examFindings = "";
+    let mimeType = "image/jpeg";
+    let isChunked = false;
+    let chunks: string[] = [];
+    let imageUrl = "";
+    let imageBase64 = "";
+    let base64Data = "";
+    let finalMimeType = "image/jpeg";
 
-    const hasImage = !!req.file || !!imageBase64 || !!imageUrl || (isChunked && Array.isArray(chunks) && chunks.length > 0);
+    if (Buffer.isBuffer(req.body)) {
+      // It is a raw binary image upload payload to avoid WAF
+      base64Data = req.body.toString("base64");
+      studyType = decodeURIComponent(req.headers['x-study-type'] as string || 'thyroid');
+      examFindings = decodeURIComponent(req.headers['x-exam-findings'] as string || '');
+      finalMimeType = decodeURIComponent(req.headers['x-mime-type'] as string || 'image/jpeg');
+      mimeType = finalMimeType;
+    } else {
+      // Standard JSON payload
+      studyType = req.body.studyType || 'thyroid';
+      examFindings = req.body.examFindings || '';
+      mimeType = req.body.mimeType || 'image/jpeg';
+      isChunked = !!req.body.isChunked;
+      chunks = req.body.chunks || [];
+      imageUrl = req.body.imageUrl || '';
+      imageBase64 = req.body.imageBase64 || '';
+      finalMimeType = mimeType;
+    }
+
+    const hasImage = !!req.file || !!imageBase64 || !!imageUrl || (isChunked && Array.isArray(chunks) && chunks.length > 0) || (base64Data.length > 0);
     if (!hasImage && !examFindings) {
       res.status(400).json({ error: "Por favor, envie uma captura de tela do exame ou insira suas anotações clínicas na caixa de texto." });
       return;
@@ -159,15 +187,12 @@ app.post("/api/analyze", (req, res, next) => {
 
     const parts: any[] = [];
 
-    let base64Data = "";
-    let finalMimeType = mimeType || "image/jpeg";
-
     if (req.file) {
       base64Data = req.file.buffer.toString("base64");
       finalMimeType = req.file.mimetype;
     } else if (isChunked && Array.isArray(chunks) && chunks.length > 0) {
       base64Data = chunks.join("");
-    } else {
+    } else if (!base64Data) {
       const activeSource = imageUrl || imageBase64;
       if (activeSource) {
         if (activeSource.startsWith("http://") || activeSource.startsWith("https://")) {
