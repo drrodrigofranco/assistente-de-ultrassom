@@ -664,8 +664,11 @@ export default function App() {
           data = JSON.parse(responseText);
         } catch (parseErr) {
           const isSizeLimit = response.status === 413 || responseText.includes('413') || responseText.toLowerCase().includes('payload too large');
+          const isForbidden = response.status === 403 || responseText.includes('403') || responseText.toLowerCase().includes('forbidden');
           const finalErrMsg = isSizeLimit 
-            ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy.'
+            ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy (Erro 413).'
+            : isForbidden
+            ? 'Requisição bloqueada por filtro de segurança do servidor/proxy (Erro 403). A compressão foi ajustada, por favor tente carregar a imagem novamente.'
             : `Resposta inválida do servidor (${response.status}): ${responseText.slice(0, 150)}...`;
           throw new Error(finalErrMsg);
         }
@@ -878,8 +881,11 @@ export default function App() {
             data = JSON.parse(responseText);
           } catch (parseErr) {
             const isSizeLimit = response.status === 413 || responseText.includes('413') || responseText.toLowerCase().includes('payload too large');
+            const isForbidden = response.status === 403 || responseText.includes('403') || responseText.toLowerCase().includes('forbidden');
             const finalErrMsg = isSizeLimit 
-              ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy.'
+              ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy (Erro 413).'
+              : isForbidden
+              ? 'Requisição bloqueada por filtro de segurança do servidor/proxy (Erro 403). A compressão foi ajustada, por favor tente carregar a imagem novamente.'
               : `Resposta inválida do servidor (${response.status}): ${responseText.slice(0, 150)}...`;
             throw new Error(finalErrMsg);
           }
@@ -1042,8 +1048,11 @@ export default function App() {
         data = JSON.parse(responseText);
       } catch (parseErr) {
         const isSizeLimit = response.status === 413 || responseText.includes('413') || responseText.toLowerCase().includes('payload too large');
+        const isForbidden = response.status === 403 || responseText.includes('403') || responseText.toLowerCase().includes('forbidden');
         const finalErrMsg = isSizeLimit 
-          ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy.'
+          ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy (Erro 413).'
+          : isForbidden
+          ? 'Requisição bloqueada por filtro de segurança do servidor/proxy (Erro 403). A compressão foi ajustada, por favor tente carregar a imagem novamente.'
           : `Resposta inválida do servidor (${response.status}): ${responseText.slice(0, 150)}...`;
         throw new Error(finalErrMsg);
       }
