@@ -31,6 +31,7 @@ import { StudyType, StructureData, CalculationResult, ExamReport, SavedLaudo } f
 import { sampleCases, ClinicalCase } from './utils/sampleData';
 import { calculateNormality } from './utils/normalityCalculator';
 import { eurpReferencesDb } from './utils/eurpReferences';
+import { compressImage } from './utils/imageCompressor';
 
 const getStudyTypeLabel = (type: StudyType): string => {
   switch (type) {
@@ -522,7 +523,7 @@ export default function App() {
     }
   };
 
-  const processSelectedFile = (file: File) => {
+  const processSelectedFile = async (file: File) => {
     if (!file.type.startsWith('image/')) {
       showStatus('Apenas arquivos de imagem de exames de ultrassom são permitidos.', 'error');
       return;
@@ -531,16 +532,24 @@ export default function App() {
     setSelectedCaseId(''); // clear active preset
     setIsBatchMode(false); // fall back to single mode
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setImagePreview(reader.result as string);
-      showStatus('Imagem individual carregada! Pronto para mapeamento IA.', 'info');
-    };
-    reader.readAsDataURL(file);
+    try {
+      showStatus('Processando e otimizando imagem...', 'info');
+      const compressedBase64 = await compressImage(file);
+      setImagePreview(compressedBase64);
+      showStatus('Imagem individual carregada e otimizada! Pronto para mapeamento IA.', 'info');
+    } catch (err: any) {
+      console.error('Erro na otimização da imagem:', err);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string);
+        showStatus('Imagem individual carregada (sem otimização)! Pronto para mapeamento IA.', 'info');
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   // Batch operations
-  const addFilesToBatch = (filesList: FileList) => {
+  const addFilesToBatch = async (filesList: FileList) => {
     const allowedFiles: File[] = [];
     for (let i = 0; i < filesList.length; i++) {
       if (filesList[i].type.startsWith('image/')) {
@@ -553,33 +562,45 @@ export default function App() {
       return;
     }
 
-    let loadedCount = 0;
+    showStatus(`Processando e otimizando ${allowedFiles.length} arquivos do lote...`, 'info');
+    
     const itemsToAppend: typeof batchFiles = [];
-
-    allowedFiles.forEach((file) => {
+    
+    for (const file of allowedFiles) {
       const id = 'batch-file-' + Math.random().toString(36).substring(2, 11);
-      const reader = new FileReader();
-      
-      reader.onloadend = () => {
+      try {
+        const compressedBase64 = await compressImage(file);
         itemsToAppend.push({
           id,
           file,
           name: file.name,
-          preview: reader.result as string,
+          preview: compressedBase64,
           progress: 0,
           status: 'pending'
         });
+      } catch (err) {
+        console.error('Erro na otimização de imagem do lote:', err);
+        // Fallback to reading file raw
+        const rawBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        itemsToAppend.push({
+          id,
+          file,
+          name: file.name,
+          preview: rawBase64,
+          progress: 0,
+          status: 'pending'
+        });
+      }
+    }
 
-        loadedCount++;
-        if (loadedCount === allowedFiles.length) {
-          setBatchFiles(prev => [...prev, ...itemsToAppend]);
-          setIsBatchMode(true);
-          setSelectedCaseId(''); // Desmarcar caso clinic de teste
-          showStatus(`${allowedFiles.length} imagens adicionadas ao lote! Pronto para análise sequencial de consenso.`, 'success');
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    setBatchFiles(prev => [...prev, ...itemsToAppend]);
+    setIsBatchMode(true);
+    setSelectedCaseId(''); // Desmarcar caso clinic de teste
+    showStatus(`${allowedFiles.length} imagens adicionadas e otimizadas! Pronto para análise sequencial.`, 'success');
   };
 
   const handleRemoveBatchFile = (id: string) => {
@@ -637,7 +658,17 @@ export default function App() {
           }),
         });
 
-        const data = await response.json();
+        const responseText = await response.text();
+        let data: any;
+        try {
+          data = JSON.parse(responseText);
+        } catch (parseErr) {
+          const isSizeLimit = response.status === 413 || responseText.includes('413') || responseText.toLowerCase().includes('payload too large');
+          const finalErrMsg = isSizeLimit 
+            ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy.'
+            : `Resposta inválida do servidor (${response.status}): ${responseText.slice(0, 150)}...`;
+          throw new Error(finalErrMsg);
+        }
 
         if (!response.ok || !data.success) {
           const errorMsg = data.error || 'Erro inesperado na análise da imagem.';
@@ -841,7 +872,17 @@ export default function App() {
             }),
           });
 
-          const data = await response.json();
+          const responseText = await response.text();
+          let data: any;
+          try {
+            data = JSON.parse(responseText);
+          } catch (parseErr) {
+            const isSizeLimit = response.status === 413 || responseText.includes('413') || responseText.toLowerCase().includes('payload too large');
+            const finalErrMsg = isSizeLimit 
+              ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy.'
+              : `Resposta inválida do servidor (${response.status}): ${responseText.slice(0, 150)}...`;
+            throw new Error(finalErrMsg);
+          }
 
           if (!response.ok || !data.success) {
             const errorMsg = data.error || 'Erro inesperado na análise da imagem.';
@@ -995,7 +1036,17 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        const isSizeLimit = response.status === 413 || responseText.includes('413') || responseText.toLowerCase().includes('payload too large');
+        const finalErrMsg = isSizeLimit 
+          ? 'Arquivo muito grande! Excede o limite de transferência do servidor/proxy.'
+          : `Resposta inválida do servidor (${response.status}): ${responseText.slice(0, 150)}...`;
+        throw new Error(finalErrMsg);
+      }
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Erro inesperado na extração via inteligência artificial.');
@@ -1154,7 +1205,13 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        throw new Error(`Resposta inválida do servidor ao gerar laudo (${response.status}): ${responseText.slice(0, 150)}...`);
+      }
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Erro na comunicação do gerador de laudo.');
