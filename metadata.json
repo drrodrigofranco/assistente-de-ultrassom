@@ -1,0 +1,6 @@
+{
+  "name": "Assistente de Ultrassom",
+  "description": "Assistente inteligente de ultrassonografia que extrai medidas de imagens via IA, calcula normalidade via código de programação determinístico e gera pré-laudos estruturados.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
