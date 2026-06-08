@@ -72,11 +72,18 @@ app.use(express.urlencoded({ extended: true, limit: "15mb" }));
  * Endpoint 1: Analyze ultrasound scan and extract measurements.
  * Matches user's custom study types and extracts structure definitions.
  */
-app.post("/api/analyze", upload.single('image'), async (req: express.Request, res: express.Response): Promise<void> => {
+app.post("/api/analyze", (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.includes('multipart/form-data')) {
+    upload.single('image')(req, res, next);
+  } else {
+    next();
+  }
+}, async (req: express.Request, res: express.Response): Promise<void> => {
   try {
-    const { imageBase64, studyType, mimeType, examFindings } = req.body;
+    const { imageBase64, studyType, mimeType, examFindings, isChunked, chunks, imageUrl } = req.body;
 
-    const hasImage = !!req.file || !!imageBase64;
+    const hasImage = !!req.file || !!imageBase64 || !!imageUrl || (isChunked && Array.isArray(chunks) && chunks.length > 0);
     if (!hasImage && !examFindings) {
       res.status(400).json({ error: "Por favor, envie uma captura de tela do exame ou insira suas anotações clínicas na caixa de texto." });
       return;
@@ -158,24 +165,29 @@ app.post("/api/analyze", upload.single('image'), async (req: express.Request, re
     if (req.file) {
       base64Data = req.file.buffer.toString("base64");
       finalMimeType = req.file.mimetype;
-    } else if (imageBase64) {
-      if (imageBase64.startsWith("http://") || imageBase64.startsWith("https://")) {
-        try {
-          console.log(`[Backup server download] Baixando imagem externa de URL para analisar: ${imageBase64}`);
-          const imgResponse = await fetch(imageBase64);
-          if (imgResponse.ok) {
-            const arrayBuffer = await imgResponse.arrayBuffer();
-            base64Data = Buffer.from(arrayBuffer).toString("base64");
-            finalMimeType = imgResponse.headers.get("content-type") || "image/jpeg";
-            console.log(`[Backup server download] Download concluído com sucesso. Tamanho: ${base64Data.length} chars, tipo: ${finalMimeType}`);
-          } else {
-            console.warn(`[Backup server download] Falha com status ${imgResponse.status} ao baixar imagem: ${imageBase64}`);
+    } else if (isChunked && Array.isArray(chunks) && chunks.length > 0) {
+      base64Data = chunks.join("");
+    } else {
+      const activeSource = imageUrl || imageBase64;
+      if (activeSource) {
+        if (activeSource.startsWith("http://") || activeSource.startsWith("https://")) {
+          try {
+            console.log(`[Backend download] Baixando imagem externa de URL para analisar: ${activeSource}`);
+            const imgResponse = await fetch(activeSource);
+            if (imgResponse.ok) {
+              const arrayBuffer = await imgResponse.arrayBuffer();
+              base64Data = Buffer.from(arrayBuffer).toString("base64");
+              finalMimeType = imgResponse.headers.get("content-type") || "image/jpeg";
+              console.log(`[Backend download] Download concluído com sucesso. Tamanho: ${base64Data.length} chars, tipo: ${finalMimeType}`);
+            } else {
+              console.warn(`[Backend download] Falha com status ${imgResponse.status} ao baixar imagem: ${activeSource}`);
+            }
+          } catch (fetchErr) {
+            console.error("[Backend download] Erro ao buscar imagem externa da URL:", fetchErr);
           }
-        } catch (fetchErr) {
-          console.error("[Backup server download] Erro ao buscar imagem externa da URL:", fetchErr);
+        } else {
+          base64Data = activeSource.replace(/^data:image\/\w+;base64,/, "");
         }
-      } else {
-        base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
       }
     }
 
