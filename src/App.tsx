@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, DragEvent, ChangeEvent } from 'react';
+import { useState, useEffect, useRef, DragEvent, ChangeEvent, FormEvent } from 'react';
 import { 
   Activity, 
   Upload, 
@@ -23,7 +23,9 @@ import {
   BookmarkCheck,
   Search,
   Scale,
-  Clock
+  Clock,
+  Lock,
+  LogOut
 } from 'lucide-react';
 import { StudyType, StructureData, CalculationResult, ExamReport, SavedLaudo } from './types';
 import { sampleCases, ClinicalCase } from './utils/sampleData';
@@ -61,6 +63,33 @@ const getStudyTypeLabel = (type: StudyType): string => {
 };
 
 export default function App() {
+  // Login State
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem('isLoggedIn') === 'true';
+  });
+  const [loginUser, setLoginUser] = useState<string>('');
+  const [loginPass, setLoginPass] = useState<string>('');
+  const [loginError, setLoginError] = useState<string>('');
+
+  const handleLogin = (e: FormEvent) => {
+    e.preventDefault();
+    if (loginUser.trim().toLowerCase() === 'rodrigofranco' && loginPass === 'Grasislaine79') {
+      setIsLoggedIn(true);
+      localStorage.setItem('isLoggedIn', 'true');
+      setLoginError('');
+    } else {
+      setLoginError('Credenciais inválidas. Por favor, tente novamente.');
+    }
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    localStorage.removeItem('isLoggedIn');
+    setLoginUser('');
+    setLoginPass('');
+    setLoginError('');
+  };
+
   // Navigation & UI States
   const [studyType, setStudyType] = useState<StudyType>('thyroid');
   const [patientName, setPatientName] = useState<string>('');
@@ -1468,6 +1497,82 @@ export default function App() {
     document.body.removeChild(element);
   };
 
+  if (!isLoggedIn) {
+    return (
+      <div id="login-root" className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+        {/* Soft emerald radial reflection */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(52,211,153,0.06)_0%,transparent_70%)] pointer-events-none" />
+        
+        <div id="login-card" className="w-full max-w-sm bg-slate-950 border border-slate-800/80 rounded-2xl p-6.5 shadow-2xl relative z-10 flex flex-col gap-5.5 backdrop-blur-md">
+          {/* Header Brand */}
+          <div className="text-center flex flex-col items-center gap-3">
+            <div id="logo-icon-container" className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl w-fit">
+              <Activity className="w-8 h-8 text-emerald-400 animate-pulse" />
+            </div>
+            <div>
+              <h1 className="text-xl font-extrabold tracking-tight text-white">Acesso ao Sistema</h1>
+              <p className="text-[11px] text-slate-400 mt-1">Assistente de Ultrassom & Laudos</p>
+            </div>
+          </div>
+
+          {/* Form */}
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-emerald-500/80" /> Nome de Usuário
+              </label>
+              <input 
+                type="text" 
+                value={loginUser}
+                onChange={(e) => setLoginUser(e.target.value)}
+                placeholder="digite seu login" 
+                autoFocus
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 transition-all placeholder-slate-600 font-medium"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 tracking-wider uppercase mb-1.5 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-emerald-500/80" /> Senha
+              </label>
+              <input 
+                type="password" 
+                value={loginPass}
+                onChange={(e) => setLoginPass(e.target.value)}
+                placeholder="••••••••" 
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/20 transition-all placeholder-slate-600 font-medium"
+                required
+              />
+            </div>
+
+            {loginError && (
+              <div className="p-3 bg-rose-950/40 border border-rose-500/30 rounded-xl text-[11px] text-rose-300 flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <span>{loginError}</span>
+              </div>
+            )}
+
+            <button 
+              type="submit" 
+              className="w-full py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-lg shadow-emerald-500/10 cursor-pointer flex items-center justify-center gap-1.5 mt-1"
+            >
+              Entrar
+            </button>
+          </form>
+
+          {/* Footer Card info */}
+          <div className="border-t border-slate-900/80 pt-4 text-center">
+            <p className="text-[10px] text-slate-500 flex items-center justify-center gap-1.5 font-medium">
+              <BookmarkCheck className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+              Ambiente Clínico Restrito • Dr. Rodrigo Franco
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div id="app-root" className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans antialiased">
       
@@ -1528,7 +1633,17 @@ export default function App() {
               )}
             </button>
 
-            <span id="api-status" className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800/85 border border-slate-700/30 rounded-xl text-xs font-medium text-slate-300">
+            {/* Sair/Logout Button */}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 rounded-xl text-xs font-semibold transition-all shadow-md active:scale-95 cursor-pointer"
+              title="Sair do sistema com segurança"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sair
+            </button>
+
+            <span id="api-status" className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800/85 border border-slate-700/30 rounded-xl text-xs font-medium text-slate-300 font-sans">
               <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse inline-block"></span>
               Servidor Conectado
             </span>
