@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "destination": "https://app-891388180547.southamerica-east1.run.app/:path*"
+    }
+  ]
+}
