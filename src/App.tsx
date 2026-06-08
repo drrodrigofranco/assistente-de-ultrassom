@@ -63,6 +63,76 @@ const getStudyTypeLabel = (type: StudyType): string => {
 };
 
 export default function App() {
+  // Technical Audit Log Interface and States
+  interface AuditLog {
+    id: string;
+    timestamp: string;
+    type: 'success' | 'warning' | 'error' | 'info';
+    action: string;
+    status: string;
+    details: string;
+    payload?: string;
+  }
+
+  const [isAuditOpen, setIsAuditOpen] = useState<boolean>(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    try {
+      const saved = localStorage.getItem('audit_logs_v1');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [auditFilter, setAuditFilter] = useState<'all' | 'error' | 'warning' | 'success'>('all');
+  const [auditSearchQuery, setAuditSearchQuery] = useState<string>('');
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+
+  const addAuditLog = (
+    type: 'success' | 'warning' | 'error' | 'info',
+    action: string,
+    status: string,
+    details: string,
+    payload?: any
+  ) => {
+    const timestamp = new Date().toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+
+    const newLog: AuditLog = {
+      id: String(Date.now()) + Math.random().toString(36).substring(2, 7),
+      timestamp,
+      type,
+      action,
+      status,
+      details,
+      payload: payload ? (typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)) : undefined
+    };
+
+    setAuditLogs(prev => {
+      const updated = [newLog, ...prev].slice(0, 50); // limit to last 50 entries
+      try {
+        localStorage.setItem('audit_logs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Error saving audit logs', e);
+      }
+      return updated;
+    });
+  };
+
+  const clearAuditLogs = () => {
+    setAuditLogs([]);
+    try {
+      localStorage.removeItem('audit_logs_v1');
+    } catch (e) {
+      console.error('Error clearing audit logs', e);
+    }
+  };
+
   // Login State
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
     return localStorage.getItem('isLoggedIn') === 'true';
@@ -77,12 +147,15 @@ export default function App() {
       setIsLoggedIn(true);
       localStorage.setItem('isLoggedIn', 'true');
       setLoginError('');
+      addAuditLog('success', 'Acesso ao Sistema', 'Sucesso', `Usuário ${loginUser.trim()} logado com sucesso. Sessão iniciada.`);
     } else {
       setLoginError('Credenciais inválidas. Por favor, tente novamente.');
+      addAuditLog('error', 'Acesso ao Sistema', 'Negado', `Tentativa de login malsucedida para usuário: ${loginUser.trim()}`);
     }
   };
 
   const handleLogout = () => {
+    addAuditLog('info', 'Acesso ao Sistema', 'Encerrado', 'O usuário encerrou a sessão ativa manualmente.');
     setIsLoggedIn(false);
     localStorage.removeItem('isLoggedIn');
     setLoginUser('');
@@ -529,6 +602,12 @@ export default function App() {
     const maxAttempts = 5;
     let currentDelay = 3000;
 
+    addAuditLog('info', 'Re-processamento Individual (Lote)', 'Iniciado', `Iniciando re-processamento para o arquivo: ${fileItem.name}.`, {
+      fileName: fileItem.name,
+      fileSize: fileItem.file.size,
+      mimeType: fileItem.file.type || 'image/jpeg'
+    });
+
     while (attempt < maxAttempts && !success) {
       attempt++;
       
@@ -569,6 +648,7 @@ export default function App() {
                               errorMsg.toLowerCase().includes('resource exhausted');
 
           if (isRateLimit && attempt < maxAttempts) {
+            addAuditLog('warning', 'Re-processamento Individual (Lote)', `Rate Limit (Tentativa ${attempt}/${maxAttempts})`, `Erro 429 retornado. Aguardando backoff exponencial de ${currentDelay}ms.`, { error: errorMsg, file: fileItem.name });
             await delay(currentDelay);
             currentDelay *= 2.5;
             continue;
@@ -633,12 +713,25 @@ export default function App() {
           }));
         }
         
+        addAuditLog('success', 'Re-processamento Individual (Lote)', 'Concluído', `Sucesso! Extraídas ${returnedExtracted.length} estruturas biométricas do arquivo ${fileItem.name}.`, {
+          fileName: fileItem.name,
+          extractedCount: returnedExtracted.length,
+          detectedType,
+          patientName: data.patientName || undefined,
+          patientAge: data.patientAge || undefined
+        });
+
         success = true;
         showStatus('Imagem re-processada com sucesso!', 'success');
 
       } catch (err: any) {
+        addAuditLog('warning', 'Re-processamento Individual (Lote)', `Tentativa ${attempt} Falhou`, `Erro na tentativa ${attempt} do arquivo ${fileItem.name}: ${err.message}`);
         if (attempt >= maxAttempts) {
           console.error(`Erro definitivo ao re-processar arquivo: ${fileItem.name}`, err);
+          addAuditLog('error', 'Re-processamento Individual (Lote)', 'Falha Definitiva', `O arquivo falhou após todas as ${maxAttempts} tentativas.`, {
+            fileName: fileItem.name,
+            error: err.message
+          });
           setBatchFiles(prev => prev.map((item, idx) => {
             if (idx === index) {
               return { 
@@ -650,7 +743,7 @@ export default function App() {
             }
             return item;
           }));
-          showStatus(`Erro ao re-processar imagem: ${err.message || 'Erro desconhecido'}`, 'error');
+          showStatus(`Erro ao re-processar imagem: ${err.message || 'Erro desconhecido'} (ver logs no rodapé)`, 'error');
         } else {
           await delay(1800);
         }
@@ -694,6 +787,11 @@ export default function App() {
     setExtractedData([]); // Iniciar lote limpo para acumular dados extraídos
     setGeneratedLaudo('');
     showStatus('Analisando imagens sequencialmente via IA. Cada exame será processado passo a passo para garantir integridade e contornar limites...', 'info');
+
+    addAuditLog('info', 'Processamento em Lote', 'Iniciado', `Iniciando análise sequencial de ${batchFiles.length} imagens dо lote.`, {
+      batchSize: batchFiles.length,
+      studyType
+    });
 
     let accumulatedData: StructureData[] = [];
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -755,6 +853,7 @@ export default function App() {
 
             if (isRateLimit && attempt < maxAttempts) {
               console.warn(`[Lote] Rate limit atingido para o item ${index + 1}. Aguardando ${currentDelay}ms antes de tentar novamente...`);
+              addAuditLog('warning', 'Processamento em Lote', `Rate Limit (Item ${index + 1}/${batchFiles.length}, Tentativa ${attempt}/${maxAttempts})`, `Erro 429 retornado para o arquivo: ${fileItem.name}. Aguardando backoff exponencial de ${currentDelay}ms.`, { error: errorMsg });
               await delay(currentDelay);
               currentDelay *= 2.5; // Backoff exponencial
               continue;
@@ -822,11 +921,21 @@ export default function App() {
             }));
           }
           
+          addAuditLog('success', 'Processamento em Lote', 'Sucesso Parcial', `Item ${index + 1}/${batchFiles.length} (${fileItem.name}) processado com sucesso. Extraídos ${returnedExtracted.length} dados biométricos.`, {
+            fileName: fileItem.name,
+            extractedCount: returnedExtracted.length,
+            detectedType,
+            patientName: data.patientName || undefined,
+            patientAge: data.patientAge || undefined
+          });
+
           success = true;
 
         } catch (err: any) {
+          addAuditLog('warning', 'Processamento em Lote', `Tentativa ${attempt} Falhou`, `Erro na tentativa ${attempt} do arquivo ${fileItem.name}: ${err.message}`);
           if (attempt >= maxAttempts) {
             console.error(`Erro definitivo ao analisar arquivo: ${fileItem.name}`, err);
+            addAuditLog('error', 'Processamento em Lote', 'Falha no Item', `Falha definitiva no item ${index + 1}/${batchFiles.length} (${fileItem.name}) após todas as ${maxAttempts} tentativas: ${err.message}`, { error: err.stack || err.message });
             setBatchFiles(prev => prev.map((item, idx) => {
               if (idx === index) {
                 return { 
@@ -848,6 +957,9 @@ export default function App() {
 
     setIsBatchProcessing(false);
     setActiveBatchIndex(-1);
+    addAuditLog('success', 'Processamento em Lote', 'Concluído', `Lote finalizado. Total de estruturas anatômicas acumuladas: ${accumulatedData.length}.`, {
+      totalStructuresSaved: accumulatedData.length
+    });
     showStatus(`Processamento finalizado! No total, ${accumulatedData.length} estruturas anatômicas foram integradas aos algoritmos clínicos.`, 'success');
   };
 
@@ -860,6 +972,14 @@ export default function App() {
 
     setIsAnalyzing(true);
     showStatus('Analisando imagens e anotações médicas com inteligência artificial para mapeamento de dados...', 'info');
+
+    addAuditLog('info', 'Extração via IA', 'Iniciado', 'Processando imagem ou texto clínico com o modelo de extração óptica.', {
+      hasImage: !!imagePreview,
+      imageMimeType: imageFile ? imageFile.type : null,
+      hasTextFindings: !!examFindings.trim(),
+      textSnippet: examFindings.trim() ? examFindings.trim().slice(0, 300) : null,
+      studyType
+    });
 
     try {
       const response = await fetch('/api/analyze', {
@@ -902,6 +1022,18 @@ export default function App() {
           setGestationalDays(data.gestationalDays);
         }
 
+        addAuditLog('success', 'Extração via IA', 'Sucesso', `Extração bem sucedida! Mapeados ${data.extractedData.length} parâmetros biométricos.`, {
+          detectedStudyType: data.studyType,
+          patientName: data.patientName || undefined,
+          patientAge: data.patientAge || undefined,
+          patientGender: data.patientGender || undefined,
+          extractedStructures: data.extractedData.map((d: any) => ({
+            name: d.name,
+            key: d.key,
+            measurements: Object.keys(d.measurements || {}).map(m => `${m}: ${d.measurements[m].value}${d.measurements[m].unit}`)
+          }))
+        });
+
         if (newType && newType !== oldType) {
           setStudyType(newType);
           setExtractedData(data.extractedData);
@@ -918,7 +1050,15 @@ export default function App() {
 
     } catch (err: any) {
       console.error(err);
-      showStatus(`Falha técnica: ${err.message}`, 'error');
+      addAuditLog('error', 'Extração via IA', 'Falha Técnica', `Erro na resposta: ${err.message}`, {
+        error: err.stack || err.message,
+        formData: {
+          studyType,
+          hasImage: !!imagePreview,
+          textLength: examFindings.trim().length
+        }
+      });
+      showStatus(`Falha técnica: ${err.message} (ver log de Auditoria no rodapé)`, 'error');
     } finally {
       setIsAnalyzing(false);
     }
@@ -982,6 +1122,21 @@ export default function App() {
     setIsGeneratingLaudo(true);
     showStatus('O Gemini está sintetizando os dados com o módulo de programação para formatar um laudo médico seguro...', 'info');
 
+    addAuditLog('info', 'Geração de Laudo', 'Iniciado', 'Sintetizando laudo clínico a partir de dados biométricos.', {
+      studyType,
+      patientName,
+      patientAge,
+      patientGender,
+      gestationalWeeks,
+      gestationalDays,
+      structuresCount: extractedData.length,
+      structures: extractedData.map(d => ({
+        name: d.name,
+        key: d.key,
+        measurements: Object.keys(d.measurements).map(m => `${m}: ${d.measurements[m].value}`)
+      }))
+    });
+
     try {
       const response = await fetch('/api/generate-laudo', {
         method: 'POST',
@@ -1007,6 +1162,11 @@ export default function App() {
 
       const newLaudoMarkdown = data.laudoMarkdown || '';
       setGeneratedLaudo(newLaudoMarkdown);
+
+      addAuditLog('success', 'Geração de Laudo', 'Sucesso', 'Laudo clínico em Markdown gerado com sucesso.', {
+        length: newLaudoMarkdown.length,
+        snippet: newLaudoMarkdown.slice(0, 500) + '...'
+      });
 
       if (newLaudoMarkdown) {
         try {
@@ -1038,7 +1198,14 @@ export default function App() {
 
     } catch (err: any) {
       console.error(err);
-      showStatus(`Falha ao compilar laudo: ${err.message}`, 'error');
+      addAuditLog('error', 'Geração de Laudo', 'Falha Técnica', `Erro na síntese: ${err.message}`, {
+        error: err.stack || err.message,
+        payload: {
+          studyType,
+          extractedDataLength: extractedData.length
+        }
+      });
+      showStatus(`Falha ao compilar laudo: ${err.message} (ver log de Auditoria no rodapé)`, 'error');
     } finally {
       setIsGeneratingLaudo(false);
     }
@@ -2729,10 +2896,17 @@ export default function App() {
 
       </main>
 
-      <footer id="clinical-footer" className="border-t border-slate-800 bg-slate-950 py-3.5 px-6 mt-auto text-center shrink-0">
-        <p className="text-[10px] text-slate-500 font-mono">
+      <footer id="clinical-footer" className="border-t border-slate-800 bg-slate-950 py-4 px-6 mt-auto shrink-0 flex flex-col md:flex-row items-center justify-between gap-4">
+        <p className="text-[10px] text-slate-500 font-mono text-center md:text-left max-w-4xl">
           © 2026 Assistente de Ultrassonografia Determinística. Este software é um assistente clínico de suporte ao diagnóstico. Toda conclusão médica gerada deve ser supervisionada, revisada e homologada por profissional capacitado sob as normas regulatórias de saúde do CFM / CBR.
         </p>
+        <button
+          onClick={() => setIsAuditOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-[11px] font-bold text-slate-350 hover:text-white border border-slate-800 hover:border-slate-700 rounded-lg transition-all cursor-pointer shadow-sm select-none shrink-0"
+        >
+          <Activity className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+          Auditoria & Rastreabilidade
+        </button>
       </footer>
 
       {showReferencesModal && (
@@ -2964,6 +3138,228 @@ export default function App() {
                     </div>
                   </div>
                 ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sliding Side Drawer for Technical Audit logs */}
+      {isAuditOpen && (
+        <div id="audit-overlay" className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex justify-end transition-all duration-300 animate-none">
+          {/* Dismiss Click Area */}
+          <div className="absolute inset-0" onClick={() => setIsAuditOpen(false)} />
+          
+          {/* Drawer Panel */}
+          <div className="relative w-full max-w-xl bg-slate-950 border-l border-slate-800 h-full flex flex-col shadow-2xl z-10">
+            {/* Header */}
+            <div className="p-4 border-b border-slate-900 flex items-center justify-between bg-slate-950">
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-emerald-400 animate-pulse" />
+                <div>
+                  <h3 className="text-sm font-bold text-white">Auditoria & Rastreabilidade Técnica</h3>
+                  <p className="text-[10px] text-slate-500 font-mono">
+                    {auditLogs.length} transações registradas localmente
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsAuditOpen(false)}
+                className="p-1 px-2.5 text-xs text-slate-400 hover:text-white bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-lg transition-all cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {/* Filter controls and Search */}
+            <div className="p-4 border-b border-slate-900 bg-slate-900/10 flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-grow">
+                  <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500" />
+                  <input
+                    type="text"
+                    placeholder="Filtrar por erro, ação, imagem..."
+                    value={auditSearchQuery}
+                    onChange={(e) => setAuditSearchQuery(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                {auditLogs.length > 0 && (
+                  <button
+                    onClick={clearAuditLogs}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/60 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-950 rounded-lg text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap"
+                    title="Limpar todos os registros de auditoria"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Limpar
+                  </button>
+                )}
+              </div>
+
+              {/* Status Tabs */}
+              <div className="flex items-center gap-1 overflow-x-auto pb-1">
+                {(['all', 'error', 'warning', 'success'] as const).map(f => {
+                  const count = f === 'all' 
+                    ? auditLogs.length 
+                    : auditLogs.filter(l => l.type === f).length;
+                  
+                  return (
+                    <button
+                      key={f}
+                      onClick={() => setAuditFilter(f)}
+                      className={`px-2.5 py-1 rounded-md text-[10.5px] font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                        auditFilter === f
+                          ? f === 'error'
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            : f === 'warning'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            : f === 'success'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-indigo-600 text-white'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-300 hover:bg-slate-850'
+                      }`}
+                    >
+                      {f === 'all' && 'Todos'}
+                      {f === 'error' && 'Erros'}
+                      {f === 'warning' && 'Avisos'}
+                      {f === 'success' && 'Sucessos'}
+                      <span className="ml-1 opacity-60 font-mono">({count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2.5 custom-scrollbar bg-slate-950">
+              {auditLogs.filter(log => {
+                if (auditFilter !== 'all' && log.type !== auditFilter) return false;
+                if (!auditSearchQuery) return true;
+                const search = auditSearchQuery.toLowerCase();
+                return (
+                  log.action.toLowerCase().includes(search) ||
+                  log.status.toLowerCase().includes(search) ||
+                  log.details.toLowerCase().includes(search) ||
+                  (log.payload && log.payload.toLowerCase().includes(search))
+                );
+              }).length === 0 ? (
+                <div className="text-center py-20 flex flex-col items-center justify-center gap-2 bg-slate-900/10 rounded-2xl border border-slate-900/60 p-6">
+                  <Activity className="w-10 h-10 text-slate-800" />
+                  <p className="text-xs font-semibold text-slate-500">Nenhum evento registrado no filtro ativo.</p>
+                  <p className="text-[10px] text-slate-600 max-w-[280px] leading-relaxed">
+                    Eventos técnicos como login, análise OCR por IA de imagens, rate limits ou erros de payload do Gemini aparecerão aqui.
+                  </p>
+                </div>
+              ) : (
+                auditLogs
+                  .filter(log => {
+                    if (auditFilter !== 'all' && log.type !== auditFilter) return false;
+                    if (!auditSearchQuery) return true;
+                    const search = auditSearchQuery.toLowerCase();
+                    return (
+                      log.action.toLowerCase().includes(search) ||
+                      log.status.toLowerCase().includes(search) ||
+                      log.details.toLowerCase().includes(search) ||
+                      (log.payload && log.payload.toLowerCase().includes(search))
+                    );
+                  })
+                  .map((log) => {
+                    const isExpanded = expandedLogId === log.id;
+                    const isError = log.type === 'error';
+                    const isWarning = log.type === 'warning';
+                    const isSuccess = log.type === 'success';
+
+                    return (
+                      <div 
+                        key={log.id} 
+                        className={`border rounded-xl transition-all ${
+                          isError 
+                            ? 'bg-rose-950/10 border-rose-900/40 hover:border-rose-900/70' 
+                            : isWarning 
+                            ? 'bg-amber-950/10 border-amber-900/30 hover:border-amber-900/60'
+                            : isSuccess 
+                            ? 'bg-emerald-950/10 border-emerald-900/30 hover:border-emerald-900/60'
+                            : 'bg-slate-900/30 border-slate-800/85 hover:border-slate-800'
+                        }`}
+                      >
+                        {/* Event Header Card */}
+                        <div 
+                          onClick={() => {
+                            if (log.payload) {
+                              setExpandedLogId(isExpanded ? null : log.id);
+                            }
+                          }}
+                          className={`p-3 flex items-start gap-3 select-none ${log.payload ? 'cursor-pointer' : ''}`}
+                        >
+                          <div className={`p-1.5 rounded-lg shrink-0 ${
+                            isError 
+                              ? 'bg-rose-500/10 text-rose-400' 
+                              : isWarning 
+                              ? 'bg-amber-500/10 text-amber-400'
+                              : isSuccess 
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : 'bg-indigo-500/15 text-indigo-400'
+                          }`}>
+                            <Activity className="w-4.5 h-4.5" />
+                          </div>
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1 flex-wrap">
+                              <span className="text-[10px] text-slate-500 font-bold font-mono tracking-wider">{log.timestamp}</span>
+                              <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md font-mono ${
+                                isError 
+                                  ? 'bg-rose-500/15 text-rose-300' 
+                                  : isWarning 
+                                  ? 'bg-amber-500/15 text-amber-300'
+                                  : isSuccess 
+                                  ? 'bg-emerald-500/15 text-emerald-300'
+                                  : 'bg-indigo-500/15 text-indigo-300'
+                              }`}>
+                                {log.status.toUpperCase()}
+                              </span>
+                            </div>
+
+                            <h4 className="text-[11.5px] font-black text-slate-100 mt-1">{log.action}</h4>
+                            <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed font-sans">{log.details}</p>
+                            
+                            {log.payload && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedLogId(isExpanded ? null : log.id);
+                                }}
+                                className="inline-flex items-center gap-1 text-[9.5px] font-bold text-slate-500 hover:text-indigo-400 transition-colors mt-2 font-mono cursor-pointer"
+                              >
+                                {isExpanded ? '[-] Recolher dados técnicos' : '[+] Expandir metadados e payload JSON'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Expandable Technical Trace details container */}
+                        {isExpanded && log.payload && (
+                          <div className="px-3 pb-3 border-t border-slate-900 bg-slate-950 rounded-b-xl overflow-hidden animate-none">
+                            <div className="flex justify-between items-center py-2">
+                              <span className="text-[9px] font-mono font-bold text-slate-500 uppercase">Objeto JSON da Transação:</span>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(log.payload || '');
+                                  showStatus('Payload copiado para a área de transferência!', 'success');
+                                }}
+                                className="px-1.5 py-0.5 text-[8.5px] font-bold bg-slate-900 border border-slate-800 text-slate-300 hover:text-white rounded transition-colors cursor-pointer"
+                              >
+                                Copiar JSON
+                              </button>
+                            </div>
+                            <pre className="text-[9.5px] font-mono text-emerald-400 bg-slate-900/50 p-2.5 rounded-lg border border-slate-900 overflow-x-auto whitespace-pre leading-normal max-h-60 custom-scrollbar select-text selection:bg-indigo-500/30">
+                              {log.payload}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
               )}
             </div>
           </div>
